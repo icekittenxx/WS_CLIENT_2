@@ -24,6 +24,7 @@
 #define SUFFIX_NAME_LEN 10
 #define FAIL_FILE_NUM 100
 #define IP_ADDRESS_LENGTH 20
+#define USER_LENGTH 50
 #define PORT_LENGTH 10
 #define EML_NUM 2000
 
@@ -36,6 +37,8 @@ char NowPath[FILE_NAME_LEN], NowFile[FILE_NAME_LEN];
 char IpAddress[IP_ADDRESS_LENGTH];
 char X_UUID[FILE_NAME_LEN];
 int PORT;
+char Username[USER_LENGTH];
+char Password[USER_LENGTH];
 
 char SendBuffer[FILE_BUF];
 
@@ -44,6 +47,9 @@ int RecvEmlNum;
 
 char FFPstr[FILE_NAME_LEN];
 
+int SetCookieFlag;
+char SessionId[SOCKET_BUF];
+
 int StringCmp(const void *a, const void *b);
 int FindFilePos(char *str, int &pos);
 int InitIp();
@@ -51,10 +57,165 @@ int InitRecvEml();
 int HttpString(char *FileName, char *HttpHead, char *SendBuffer, int &FileLen);
 int SendSocket(SOCKET CientSocket, char *SendBuffer, clock_t &StartTime);
 int JudegeRecvBuf(char *ReceiveBuffer);
-int DoReceiveState(int state);
+int DoReceiveState(int state, char *ReceiveBuffer);
 int Communication(char *FileName, SOCKET ClientSocket, char FailFileName[][FILE_NAME_LEN], int &FailTime);
 int Connet(char *FileName, char FailFileName[][FILE_NAME_LEN], int &FailTime);
+int SetCookie();
+int GetCookie(SOCKET ClientSocket);
+int CookieString();
+int GetSessionId(char *ReceiveBuffer);
 
+int GetSessionId(char *ReceiveBuffer){
+	int i = 0, j = 0;
+	int len = strlen(ReceiveBuffer);
+
+	memset(SessionId, 0x00, sizeof SessionId);
+
+	for(i = 0; i < len - 9; i ++){
+		if((ReceiveBuffer[i] == 'S' || ReceiveBuffer[i] == 's')
+			&& (ReceiveBuffer[i + 1] == 'E' || ReceiveBuffer[i + 1] == 'e')
+			&& (ReceiveBuffer[i + 2] == 'S' || ReceiveBuffer[i + 2] == 's')
+			&& (ReceiveBuffer[i + 3] == 'S' || ReceiveBuffer[i + 3] == 's')
+			&& (ReceiveBuffer[i + 4] == 'I' || ReceiveBuffer[i + 4] == 'i')
+			&& (ReceiveBuffer[i + 5] == 'O' || ReceiveBuffer[i + 5] == 'o')
+			&& (ReceiveBuffer[i + 6] == 'N' || ReceiveBuffer[i + 6] == 'n')
+			&& (ReceiveBuffer[i + 7] == 'I' || ReceiveBuffer[i + 7] == 'i')
+			&& (ReceiveBuffer[i + 8] == 'D' || ReceiveBuffer[i + 8] == 'd')){
+			for(int j = 0; i + j < len; j ++){
+				SessionId[j] = ReceiveBuffer[i + j];
+				if(ReceiveBuffer[i + j] == ';'){
+					SessionId[j] = 0;
+					break;
+				}
+			}
+			break;
+		}
+	}
+	return 1;
+}
+
+int CookieString(){
+	char HttpHead[SOCKET_BUF];
+	char FileLenString[FILE_NAME_LEN];
+	int FileLen, HeadLen;
+
+	memset(HttpHead, 0x00, sizeof HttpHead);
+	memset(SendBuffer, 0x00, sizeof SendBuffer);
+	memset(FileLenString, 0x00, sizeof FileLenString);
+	FileLen = 0;
+	HeadLen = 0;
+
+	strcat(SendBuffer, "username=");
+	strcat(SendBuffer, Username);
+	strcat(SendBuffer, "&password=");
+	strcat(SendBuffer, Password);
+	FileLen = strlen(SendBuffer);
+
+	sprintf(FileLenString, "%d", FileLen);
+
+	strcat(HttpHead, "POST /login HTTP/1.1\r\n");
+	strcat(HttpHead, "Host: ");
+	strcat(HttpHead, IpAddress);
+	strcat(HttpHead, "\r\n");
+	strcat(HttpHead, "Accept: */*\r\n");
+	strcat(HttpHead, "X-UUID: ");
+	strcat(HttpHead, X_UUID);
+	strcat(HttpHead, "\r\n");
+	strcat(HttpHead, "Content-Type: application/x-www-form-urlencoded\r\n");
+	strcat(HttpHead, "Content-Length: ");
+	strcat(HttpHead, FileLenString);
+	strcat(HttpHead, "\r\n");
+	strcat(HttpHead, "\r\n");
+
+	HeadLen = strlen(HttpHead);
+	memmove(SendBuffer + HeadLen, SendBuffer, FileLen);
+	memcpy(SendBuffer, HttpHead, HeadLen);
+
+	return 0;
+}
+
+int GetCookie(SOCKET ClientSocket){
+	char RecvBuffer[SOCKET_BUF];
+	int ReceiveBufferIsEmpty = 1;
+	int CookieStringRes = -1;
+	int SendRes = -1, ReceiveRes = -1;
+	int HttpState = 0;
+	int SendLen = 0;
+
+	unsigned long ul = 1;
+	int Ret = 0;
+
+	CookieStringRes = CookieString();
+	if(CookieStringRes == -1){
+		return -1;
+	}
+
+	SendLen = (int)strlen(SendBuffer);
+	SendRes = send(ClientSocket, SendBuffer, SendLen, 0);
+	if(SendRes == SOCKET_ERROR){
+		return -1;
+	}
+
+	memset(RecvBuffer, 0x00, sizeof RecvBuffer);
+	ReceiveBufferIsEmpty = true;
+	
+	while(true){
+		ReceiveRes = recv(ClientSocket, RecvBuffer, SOCKET_BUF, 0);
+		if(ReceiveRes == 0 || ReceiveRes == SOCKET_ERROR){
+			break;
+		}
+
+		if((int)strlen(RecvBuffer) != 0){
+			ReceiveBufferIsEmpty = 0;
+		}
+
+		if(ReceiveBufferIsEmpty == false){
+			ReceiveRes = JudegeRecvBuf(RecvBuffer);
+			if(ReceiveRes != -1){
+				HttpState = ReceiveRes;
+			}
+		}
+	}
+	ReceiveRes = DoReceiveState(HttpState, RecvBuffer);
+	return 1;
+}
+
+int SetCookie(){
+	WSADATA  Ws;
+	SOCKET ClientSocket;
+	struct sockaddr_in ServerAddr;
+	int AddrLen = 0;
+	HANDLE hThread = NULL;
+	int Ret = 0;
+	
+	if(WSAStartup(MAKEWORD(2,2), &Ws) != 0){
+		return -1;
+	}
+
+	ClientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if(ClientSocket == INVALID_SOCKET){
+		return -1;
+	}
+
+	ServerAddr.sin_family = AF_INET;
+	ServerAddr.sin_addr.s_addr = inet_addr(IpAddress);
+	ServerAddr.sin_port = htons(PORT);
+	memset(ServerAddr.sin_zero, 0x00, 8);
+
+	Ret = connect(ClientSocket,(struct sockaddr*)&ServerAddr, sizeof(ServerAddr));
+	if(Ret == SOCKET_ERROR){
+		return -1;
+	}
+
+	Ret = GetCookie(ClientSocket);
+	if(Ret == -1){
+		return -1;
+	}
+
+	closesocket(ClientSocket);
+	WSACleanup();
+	return 0;
+}
 
 int StringCmp(const void *a, const void *b){
 	int result = 0;
@@ -122,6 +283,8 @@ int InitIp(){
 
 		fscanf(PFile, "%s", IpAddress);
 		fscanf(PFile, "%d", &PORT);
+		fscanf(PFile, "%s", Username);
+		fscanf(PFile, "%s", Password);
 
 #ifdef __DEBUG__CLIENT__INITIP
 		printf("IP_ADDRESS: %s\n", IpAddress);
@@ -206,6 +369,9 @@ int HttpString(char *FileName, char *HttpHead, char *SendBuffer, int &FileLen){
 		strcat(HttpHead, "Content-Length: ");
 		strcat(HttpHead, FileLenString);
 		strcat(HttpHead, "\r\n");
+		strcat(HttpHead, "Cookie: ");
+		strcat(HttpHead, SessionId);
+		strcat(HttpHead, "\r\n");
 		strcat(HttpHead, "\r\n");
 
 		HeadLen = strlen(HttpHead);
@@ -254,12 +420,14 @@ int JudegeRecvBuf(char *ReceiveBuffer){
 	return Result;
 }
 
-int DoReceiveState(int state){
+int DoReceiveState(int state, char *ReceiveBuffer){
 	FILE *PFile;
 	int Ret = -1;
 	char TempPath[FILE_NAME_LEN];
 
 	switch(state){
+	case 200:
+		break;
 	case 201:
 		memset(TempPath, 0x00, sizeof TempPath);
 		strcat(TempPath, NowPath);
@@ -267,6 +435,10 @@ int DoReceiveState(int state){
 		PFile = fopen(TempPath, "a+");
 		fprintf(PFile, "%s\n", NowFile);
 		fclose(PFile);
+		Ret = 1;
+		break;
+	case 302:
+		GetSessionId(ReceiveBuffer);
 		Ret = 1;
 		break;
 	case 400:
@@ -360,7 +532,7 @@ int Communication(char *FileName, SOCKET ClientSocket, char FailFileName[][FILE_
 		if(ReceiveBufferIsEmpty == false){
 			ReceiveRes = JudegeRecvBuf(RecvBuffer);
 
-			HttpRes = DoReceiveState(ReceiveRes);
+			HttpRes = DoReceiveState(ReceiveRes, RecvBuffer);
 
 			//---------------------------------------------------------------------
 			/*
@@ -509,6 +681,8 @@ int main(){
 	PP = fopen("copy.txt", "w");
 	fclose(PP);
 
+	SetCookieFlag = 0;
+
 	if((fHandle = _findfirst(tempFindFileClass, &FindFile)) == -1L){
 
 #ifdef __DEBUG__CLIENT__MAIN
@@ -533,6 +707,16 @@ int main(){
 			result = FindFilePos(FindFile.name, FindPos);
 			if(result == 1){
 				continue;
+			}
+
+			if(SetCookieFlag == 0){
+				result = SetCookie();
+				if(result == 0){
+					SetCookieFlag = 1;
+				}
+				else{
+					continue;
+				}
 			}
 
 			memset(NowFile, 0x00, sizeof NowFile);
