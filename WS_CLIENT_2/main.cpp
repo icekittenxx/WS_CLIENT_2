@@ -39,6 +39,7 @@ char X_UUID[FILE_NAME_LEN];
 int PORT;
 char Username[USER_LENGTH];
 char Password[USER_LENGTH];
+char AppendPath[FILE_NAME_LEN];
 
 char SendBuffer[FILE_BUF];
 
@@ -285,6 +286,7 @@ int InitIp(){
 		fscanf(PFile, "%d", &PORT);
 		fscanf(PFile, "%s", Username);
 		fscanf(PFile, "%s", Password);
+		fscanf(PFile, "%s", AppendPath);
 
 #ifdef __DEBUG__CLIENT__INITIP
 		printf("IP_ADDRESS: %s\n", IpAddress);
@@ -358,7 +360,9 @@ int HttpString(char *FileName, char *HttpHead, char *SendBuffer, int &FileLen){
 
 		sprintf(FileLenString, "%d", FileLen);
 
-		strcat(HttpHead, "POST /email HTTP/1.1\r\n");
+		strcat(HttpHead, "POST /email/path/");
+		strcat(HttpHead, AppendPath);
+		strcat(HttpHead, " HTTP/1.1\r\n");
 		strcat(HttpHead, "Host: ");
 		strcat(HttpHead, IpAddress);
 		strcat(HttpHead, "\r\n");
